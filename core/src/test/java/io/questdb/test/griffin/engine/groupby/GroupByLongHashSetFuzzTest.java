@@ -27,6 +27,7 @@ package io.questdb.test.griffin.engine.groupby;
 import io.questdb.griffin.engine.groupby.FastGroupByAllocator;
 import io.questdb.griffin.engine.groupby.GroupByAllocator;
 import io.questdb.griffin.engine.groupby.GroupByLongHashSet;
+import io.questdb.std.MemoryTracker;
 import io.questdb.std.Numbers;
 import io.questdb.std.Rnd;
 import io.questdb.test.AbstractCairoTest;
@@ -51,7 +52,7 @@ public class GroupByLongHashSetFuzzTest extends AbstractCairoTest {
     @Test
     public void testMerge() throws Exception {
         assertMemoryLeak(() -> {
-            try (GroupByAllocator allocator = new FastGroupByAllocator(64, Numbers.SIZE_1GB)) {
+            try (CountingGroupByAllocator allocator = new CountingGroupByAllocator()) {
                 GroupByLongHashSet setA = new GroupByLongHashSet(16, 0.5, -1);
                 setA.setAllocator(allocator);
                 setA.of(0);
@@ -59,25 +60,33 @@ public class GroupByLongHashSetFuzzTest extends AbstractCairoTest {
                 setB.setAllocator(allocator);
                 setB.of(0);
 
-                final int N = 1000;
+                final int destSize = 10;
+                final int srcSize = 1000;
 
-                for (int i = 0; i < N; i++) {
+                for (int i = 0; i < destSize; i++) {
                     setA.add(i);
                 }
-                Assert.assertEquals(N, setA.size());
-                Assert.assertTrue(setA.capacity() >= N);
+                Assert.assertEquals(destSize, setA.size());
+                Assert.assertTrue(setA.capacity() >= destSize);
 
-                for (int i = N; i < 2 * N; i++) {
+                for (int i = destSize; i < destSize + srcSize; i++) {
                     setB.add(i);
                 }
-                Assert.assertEquals(N, setB.size());
-                Assert.assertTrue(setB.capacity() >= N);
+                Assert.assertEquals(srcSize, setB.size());
+                Assert.assertTrue(setB.capacity() >= srcSize);
 
+                allocator.resetMallocCount();
                 setA.merge(setB);
-                Assert.assertEquals(2 * N, setA.size());
-                for (int i = 0; i < 2 * N; i++) {
+                Assert.assertEquals(1, allocator.getMallocCount());
+                Assert.assertEquals(destSize + srcSize, setA.size());
+                for (int i = 0; i < destSize + srcSize; i++) {
                     Assert.assertTrue(setA.keyIndex(i) < 0);
                 }
+
+                allocator.resetMallocCount();
+                setA.merge(setA);
+                Assert.assertEquals(0, allocator.getMallocCount());
+                Assert.assertEquals(destSize + srcSize, setA.size());
             }
         });
     }
@@ -122,5 +131,59 @@ public class GroupByLongHashSetFuzzTest extends AbstractCairoTest {
                 }
             }
         });
+    }
+
+    private static class CountingGroupByAllocator implements GroupByAllocator {
+        private final GroupByAllocator delegate = new FastGroupByAllocator(64, Numbers.SIZE_1GB);
+        private int mallocCount;
+
+        @Override
+        public long allocated() {
+            return delegate.allocated();
+        }
+
+        @Override
+        public void clear() {
+            delegate.clear();
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
+
+        @Override
+        public void free(long ptr, long size) {
+            delegate.free(ptr, size);
+        }
+
+        public int getMallocCount() {
+            return mallocCount;
+        }
+
+        @Override
+        public long malloc(long size) {
+            mallocCount++;
+            return delegate.malloc(size);
+        }
+
+        @Override
+        public long realloc(long ptr, long oldSize, long newSize) {
+            return delegate.realloc(ptr, oldSize, newSize);
+        }
+
+        @Override
+        public void reopen() {
+            delegate.reopen();
+        }
+
+        public void resetMallocCount() {
+            mallocCount = 0;
+        }
+
+        @Override
+        public void setMemoryTracker(MemoryTracker tracker) {
+            delegate.setMemoryTracker(tracker);
+        }
     }
 }

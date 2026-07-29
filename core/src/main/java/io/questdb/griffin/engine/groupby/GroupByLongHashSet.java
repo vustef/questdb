@@ -111,6 +111,20 @@ public class GroupByLongHashSet {
     }
 
     public void merge(GroupByLongHashSet srcSet) {
+        final int srcSize = srcSet.size();
+        if (srcSize == 0 || ptr == srcSet.ptr) {
+            return;
+        }
+
+        // The exact union cardinality is unknown until the merge is complete. Use the
+        // sum as an upper bound so that, when growth is necessary, we rehash once
+        // before the merge instead of repeatedly rehashing the growing destination.
+        final long expectedSize = (long) size() + srcSize;
+        final long maxSize = (long) (Numbers.MAX_SAFE_INT_POW_2 * loadFactor) - 1;
+        if (expectedSize <= maxSize) {
+            reserve(expectedSize);
+        }
+
         for (long p = srcSet.ptr + HEADER_SIZE, lim = srcSet.ptr + HEADER_SIZE + 8L * srcSet.capacity(); p < lim; p += 8L) {
             long val = Unsafe.getLong(p);
             if (val != noKeyValue) {
@@ -120,6 +134,26 @@ public class GroupByLongHashSet {
                 }
             }
         }
+    }
+
+    private void reserve(long expectedSize) {
+        if (expectedSize < sizeLimit()) {
+            return;
+        }
+
+        // addAt() grows the set when size reaches sizeLimit, so the new limit must
+        // be strictly greater than expectedSize.
+        final long requiredCapacity = (long) Math.ceil((expectedSize + 1) / loadFactor);
+        if (requiredCapacity > Numbers.MAX_SAFE_INT_POW_2) {
+            throw CairoException.nonCritical().put("long hash set capacity overflow");
+        }
+
+        final int newCapacity = Numbers.ceilPow2((int) requiredCapacity);
+        final int newSizeLimit = (int) (newCapacity * loadFactor);
+        if (newSizeLimit <= expectedSize) {
+            throw CairoException.nonCritical().put("long hash set capacity overflow");
+        }
+        rehash(newCapacity, newSizeLimit);
     }
 
     public GroupByLongHashSet of(long ptr) {

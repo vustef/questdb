@@ -159,15 +159,26 @@ Query          Minimum          Mean        Median
 ━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━━  ━━━━━━━━━━━━
 Canonical    95.446 ms    113.421 ms    104.859 ms
 ───────────  ───────────  ────────────  ────────────
-Bucketed (this optimization)     85.241 ms    103.139 ms     95.119 ms
+Bucketed     85.241 ms    103.139 ms     95.119 ms
 ```
 
 So this is a query rewrite, but it's just a PoC that if engine changes were made to use second level of bucketing, performance gains could be made.
 
 ## Experiment 2 (incremental): presize hash tables to avoid rehashing during merge.
 
+```
+Query                  Min       Median         Mean           p95
+━━━━━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━━
+Canonical Q10    91.876 ms    97.549 ms    98.098 ms    105.217 ms
+───────────────  ───────────  ───────────  ───────────  ────────────
+16-bucket Q10    84.307 ms    89.419 ms    91.842 ms    107.194 ms
+```
+Canonical Q10 improved more, but for bucketed one mean and median also improved a couple of percents.
 
 
+## Experiment 3 (incremental): unordered map for composite keys
+When we switched to using composite key of model + user, the engine
+fell back to using ordered map, instead of an unordered map.
 
 # Sorted partitions
 Didn't explore this, but if partitions were finer-grained, and also sorted by model+user, we could explore streaming top-K execution. This might not be according to benchmark spec though.
