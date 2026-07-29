@@ -29,6 +29,7 @@ import io.questdb.cairo.CairoException;
 import io.questdb.cairo.ColumnType;
 import io.questdb.cairo.SingleColumnType;
 import io.questdb.cairo.map.MapKey;
+import io.questdb.cairo.map.MapFactory;
 import io.questdb.cairo.map.MapRecord;
 import io.questdb.cairo.map.MapRecordCursor;
 import io.questdb.cairo.map.MapValue;
@@ -58,6 +59,68 @@ import java.util.function.Consumer;
 public class Unordered8MapTest extends AbstractCairoTest {
     Decimal128 decimal128 = new Decimal128();
     Decimal256 decimal256 = new Decimal256();
+
+    @Test
+    public void testCompositeSymbolIntKey() throws Exception {
+        TestUtils.assertMemoryLeak(() -> {
+            final ArrayColumnTypes keyTypes = new ArrayColumnTypes();
+            keyTypes.add(ColumnType.SYMBOL);
+            keyTypes.add(ColumnType.INT);
+
+            try (
+                    io.questdb.cairo.map.Map map = MapFactory.createUnorderedMap(
+                            configuration,
+                            keyTypes,
+                            new SingleColumnType(ColumnType.LONG)
+                    )
+            ) {
+                Assert.assertTrue(map instanceof Unordered8Map);
+
+                final int modelCount = 32;
+                final int bucketCount = 16;
+                for (int model = 0; model < modelCount; model++) {
+                    for (int bucket = 0; bucket < bucketCount; bucket++) {
+                        MapKey key = map.withKey();
+                        key.putInt(model);
+                        key.putInt(bucket);
+                        MapValue value = key.createValue();
+                        Assert.assertTrue(value.isNew());
+                        value.putLong(0, model * bucketCount + bucket);
+                    }
+                }
+
+                for (int model = 0; model < modelCount; model++) {
+                    for (int bucket = 0; bucket < bucketCount; bucket++) {
+                        MapKey key = map.withKey();
+                        key.putInt(model);
+                        key.putInt(bucket);
+                        MapValue value = key.findValue();
+                        Assert.assertNotNull(value);
+                        Assert.assertEquals(model * bucketCount + bucket, value.getLong(0));
+                    }
+                }
+
+                final boolean[][] seen = new boolean[modelCount][bucketCount];
+                try (MapRecordCursor cursor = map.getCursor()) {
+                    MapRecord record = cursor.getRecord();
+                    while (cursor.hasNext()) {
+                        final int model = record.getInt(1);
+                        final int bucket = record.getInt(2);
+                        Assert.assertFalse(seen[model][bucket]);
+                        seen[model][bucket] = true;
+                        Assert.assertEquals(model * bucketCount + bucket, record.getLong(0));
+                    }
+                }
+
+                Assert.assertEquals((long) modelCount * bucketCount, map.size());
+                for (int model = 0; model < modelCount; model++) {
+                    for (int bucket = 0; bucket < bucketCount; bucket++) {
+                        Assert.assertTrue(seen[model][bucket]);
+                    }
+                }
+            }
+        });
+    }
 
     @Test
     public void testAllValueTypes() throws Exception {

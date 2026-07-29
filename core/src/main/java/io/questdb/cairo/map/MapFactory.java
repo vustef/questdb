@@ -32,6 +32,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public class MapFactory {
+    private static final boolean ENABLE_UNORDERED_8_MAP_COMPOSITE_KEYS = Boolean.parseBoolean(
+            System.getProperty("questdb.experimental.unordered8map.composite.keys", "true")
+    );
 
     /**
      * Creates a Map pre-allocated to a small capacity to be used in SAMPLE BY, GROUP BY queries, but not only.
@@ -228,6 +231,19 @@ public class MapFactory {
                         openOnInit
                 );
             }
+        } else if (
+                ENABLE_UNORDERED_8_MAP_COMPOSITE_KEYS
+                        && Unordered8Map.isSupportedKeyTypes(keyTypes)
+                        && Long.BYTES + valueSize <= maxEntrySize
+        ) {
+            return new Unordered8Map(
+                    keyTypes,
+                    valueTypes,
+                    keyCapacity,
+                    configuration.getSqlFastMapLoadFactor(),
+                    configuration.getSqlMapMaxResizes(),
+                    openOnInit
+            );
         }
 
         return new OrderedMap(

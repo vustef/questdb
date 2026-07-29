@@ -29,6 +29,7 @@ import io.questdb.cairo.ColumnType;
 import io.questdb.cairo.ColumnTypes;
 import io.questdb.cairo.RecordSink;
 import io.questdb.cairo.Reopenable;
+import io.questdb.cairo.SingleColumnType;
 import io.questdb.cairo.arr.ArrayView;
 import io.questdb.cairo.sql.PageFrameMemoryRecord;
 import io.questdb.cairo.sql.Record;
@@ -125,7 +126,7 @@ public class Unordered8Map implements Map, Reopenable {
             double loadFactor,
             int maxResizes
     ) {
-        this(keyType, valueTypes, keyCapacity, loadFactor, maxResizes, MemoryTag.NATIVE_UNORDERED_MAP, true);
+        this(new SingleColumnType(keyType), valueTypes, keyCapacity, loadFactor, maxResizes, MemoryTag.NATIVE_UNORDERED_MAP, true);
     }
 
     public Unordered8Map(
@@ -136,11 +137,34 @@ public class Unordered8Map implements Map, Reopenable {
             int maxResizes,
             boolean openOnInit
     ) {
-        this(keyType, valueTypes, keyCapacity, loadFactor, maxResizes, MemoryTag.NATIVE_UNORDERED_MAP, openOnInit);
+        this(new SingleColumnType(keyType), valueTypes, keyCapacity, loadFactor, maxResizes, MemoryTag.NATIVE_UNORDERED_MAP, openOnInit);
+    }
+
+    public Unordered8Map(
+            @Transient ColumnTypes keyTypes,
+            @Transient @Nullable ColumnTypes valueTypes,
+            int keyCapacity,
+            double loadFactor,
+            int maxResizes,
+            boolean openOnInit
+    ) {
+        this(keyTypes, valueTypes, keyCapacity, loadFactor, maxResizes, MemoryTag.NATIVE_UNORDERED_MAP, openOnInit);
     }
 
     Unordered8Map(
             int keyType,
+            @Nullable @Transient ColumnTypes valueTypes,
+            int keyCapacity,
+            double loadFactor,
+            int maxResizes,
+            int memoryTag,
+            boolean openOnInit
+    ) {
+        this(new SingleColumnType(keyType), valueTypes, keyCapacity, loadFactor, maxResizes, memoryTag, openOnInit);
+    }
+
+    Unordered8Map(
+            @Transient ColumnTypes keyTypes,
             @Nullable @Transient ColumnTypes valueTypes,
             int keyCapacity,
             double loadFactor,
@@ -157,8 +181,8 @@ public class Unordered8Map implements Map, Reopenable {
             this.maxResizes = maxResizes;
             nResizes = 0;
 
-            if (!isSupportedKeyType(keyType)) {
-                throw CairoException.nonCritical().put("unexpected key type: ").put(keyType);
+            if (!isSupportedKeyTypes(keyTypes)) {
+                throw CairoException.nonCritical().put("unexpected key types");
             }
 
             long valueOffset = 0;
@@ -205,7 +229,7 @@ public class Unordered8Map implements Map, Reopenable {
             value2 = new FlyweightPackedMapValue(valueSize, valueOffsets);
             value3 = new FlyweightPackedMapValue(valueSize, valueOffsets);
 
-            record = new Unordered8MapRecord(valueSize, valueOffsets, value, valueTypes);
+            record = new Unordered8MapRecord(valueSize, valueOffsets, value, keyTypes, valueTypes);
             cursor = new Unordered8MapCursor(record, this);
             key = new Key();
         } catch (Throwable th) {
@@ -216,6 +240,16 @@ public class Unordered8Map implements Map, Reopenable {
 
     public static boolean isSupportedKeyType(int columnType) {
         return columnType == ColumnType.LONG || columnType == ColumnType.TIMESTAMP || columnType == ColumnType.DATE;
+    }
+
+    public static boolean isSupportedKeyTypes(ColumnTypes keyTypes) {
+        final int keyColumnCount = keyTypes.getColumnCount();
+        if (keyColumnCount == 1) {
+            return isSupportedKeyType(keyTypes.getColumnType(0));
+        }
+        return keyColumnCount == 2
+                && Unordered4Map.isSupportedKeyType(keyTypes.getColumnType(0))
+                && Unordered4Map.isSupportedKeyType(keyTypes.getColumnType(1));
     }
 
     @Override
@@ -372,6 +406,7 @@ public class Unordered8Map implements Map, Reopenable {
 
         for (long r = batchStart; r < batchEnd; r++) {
             record.setRowIndex(r);
+            key.init();
             mapSink.copy(record, key);
             final long k = key.key;
 
@@ -439,6 +474,7 @@ public class Unordered8Map implements Map, Reopenable {
         for (long p = batchStart; p < batchEnd; p++) {
             final long r = Unsafe.getLong(rowIdsAddr + (p << 3));
             record.setRowIndex(r);
+            key.init();
             mapSink.copy(record, key);
             final long k = key.key;
 
@@ -594,6 +630,7 @@ public class Unordered8Map implements Map, Reopenable {
 
     @Override
     public MapKey withKey() {
+        key.init();
         return key;
     }
 
@@ -807,6 +844,7 @@ public class Unordered8Map implements Map, Reopenable {
 
     class Key implements MapKey {
         private long key;
+        private int keyOffset;
 
         @Override
         public long commit() {
@@ -912,12 +950,19 @@ public class Unordered8Map implements Map, Reopenable {
 
         @Override
         public void putIPv4(int value) {
-            throw new UnsupportedOperationException();
+            putInt(value);
         }
 
         @Override
         public void putInt(int value) {
-            throw new UnsupportedOperationException();
+            if (keyOffset == 0) {
+                key = Integer.toUnsignedLong(value);
+            } else if (keyOffset == Integer.BYTES) {
+                key |= Integer.toUnsignedLong(value) << 32;
+            } else {
+                throw new UnsupportedOperationException();
+            }
+            keyOffset += Integer.BYTES;
         }
 
         @Override
@@ -927,7 +972,11 @@ public class Unordered8Map implements Map, Reopenable {
 
         @Override
         public void putLong(long value) {
+            if (keyOffset != 0) {
+                throw new UnsupportedOperationException();
+            }
             this.key = value;
+            keyOffset = Long.BYTES;
         }
 
         @Override
@@ -1020,6 +1069,12 @@ public class Unordered8Map implements Map, Reopenable {
 
         void copyFromRawKey(long key) {
             this.key = key;
+            this.keyOffset = Long.BYTES;
+        }
+
+        void init() {
+            key = 0;
+            keyOffset = 0;
         }
     }
 }

@@ -1,17 +1,6 @@
 # Clickbench Q10 Experiments
 Conducted on Macbook M1 Max with 64GiB RAM, 8 performance + 2 efficiency cores.
 
-Profile only Q10:
-```
-./artifacts/clickbench/run.sh profile -t clickbench -- start -e cpu -i 5ms
-
-./artifacts/clickbench/bench.py q10 \
---warmups 3 --runs 10 --no-result
-
-./artifacts/clickbench/run.sh profile -t clickbench -- \
-stop -f /tmp/clickbench-q10.html
-```
-
 ## Hits table and query details
 Hits table has 22 daily partitions, containing ~99m rows total.
 ```
@@ -180,6 +169,18 @@ Canonical Q10 improved more, but for bucketed one mean and median also improved 
 When we switched to using composite key of model + user, the engine
 fell back to using ordered map, instead of an unordered map.
 
+```
+Query                          Min       Median         Mean           p95
+━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━  ━━━━━━━━━━━━
+Experiment 2 bucketed    83.251 ms    89.349 ms    92.992 ms    115.080 ms
+───────────────────────  ───────────  ───────────  ───────────  ────────────
+Experiment 3 bucketed    69.362 ms    74.210 ms    75.030 ms     81.997 ms
+───────────────────────  ───────────  ───────────  ───────────  ────────────
+Improvement                  16.7%        16.9%        19.3%             —
+```
+There's some variation between runs depending on my machine state (I killed some processes since experiment 2), so I had experiment repeated.
+It shows that unordered map helps, with 69.3ms min, 75ms mean - compared to baseline's 97ms min and 107ms mean. Despite noise, there's high confidence that this is an actual improvement of **~29-30% improvement on this query**.
+
 # Sorted partitions
 Didn't explore this, but if partitions were finer-grained, and also sorted by model+user, we could explore streaming top-K execution. This might not be according to benchmark spec though.
 
@@ -195,3 +196,25 @@ Streaming count by model
     ->
 Top-10 heap
 ```
+
+## Future work
+Besides making such changes part of the engine, that doesn't rewrite on manual query rewrite, we should explore other changes.
+
+### Profile findings after experiment 3
+The valid profile contains 45,926 CPU samples. Percentages below are inclusive and
+overlap:
+- Scan-side aggregation: 52.9%.
+- Scan-side count_distinct: 40.3%.
+- Any GroupByLongHashSet.keyIndex: 37.3%.
+- Unordered8Map: 10.7%.
+- Shard merge: 7.2%.
+- Merge-side count_distinct: 6.8%.
+- Hash-set rehashing: 5.0%, split into 3.3% scan-side and 1.7% merge-side.
+- Final outer group-by: only 2.0%.
+
+Based on this, it's worth spending time on building hash table and probing.
+Also perhaps something that tries to collocate data within a fragment, e.g. first distribute data by hash, then build hash tables there, ensuring that memory accesses is not scattered but most of the time in L2.
+Maybe also hashing several independent rows, prefetching their initial slots.
+
+We could also try to reduce number of calls to keyIndex, e.g. take some small data, radix-sort it, and insert each local unique pair only once.
+And not to forget, we should double-check load factor and capacity. If collisions are a problem, we should consider some tricks that minimize collision costs.

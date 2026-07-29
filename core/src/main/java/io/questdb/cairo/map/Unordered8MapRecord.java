@@ -62,28 +62,27 @@ final class Unordered8MapRecord implements MapRecord {
             long valueSize,
             long[] valueOffsets,
             FlyweightPackedMapValue value,
+            @Transient ColumnTypes keyTypes,
             @Nullable @Transient ColumnTypes valueTypes
     ) {
         this.valueSize = valueSize;
         this.valueOffsets = valueOffsets;
         this.value = value;
 
-        int nColumns;
-        int keyIndexOffset;
-        if (valueTypes != null) {
-            keyIndexOffset = valueTypes.getColumnCount();
-            nColumns = valueTypes.getColumnCount() + 1;
-        } else {
-            keyIndexOffset = 0;
-            nColumns = 1;
-        }
+        final int valueColumnCount = valueTypes != null ? valueTypes.getColumnCount() : 0;
+        final int keyColumnCount = keyTypes.getColumnCount();
+        final int nColumns = valueColumnCount + keyColumnCount;
 
         columnOffsets = new long[nColumns];
 
         Long256Impl[] long256A = null;
         Long256Impl[] long256B = null;
 
-        columnOffsets[keyIndexOffset] = 0;
+        long keyOffset = 0;
+        for (int i = 0; i < keyColumnCount; i++) {
+            columnOffsets[valueColumnCount + i] = keyOffset;
+            keyOffset += ColumnType.sizeOf(keyTypes.getColumnType(i));
+        }
         long offset = Unordered8Map.KEY_SIZE;
         if (valueTypes != null) {
             for (int i = 0, n = valueTypes.getColumnCount(); i < n; i++) {
